@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +52,14 @@ fun TunerScreen(viewModel: TunerViewModel) {
         wasTuned = isTuned
     }
 
+    // Ekran ne sme da se zamrači/zaključa dok korisnik aktivno štimuje - inače
+    // te izbaci iz sesije usred posla. Uklanjamo flag čim se ekran napusti.
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -57,7 +67,7 @@ fun TunerScreen(viewModel: TunerViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
 
-        micError?.let {
+        if (micError != null) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -106,6 +116,14 @@ fun TunerScreen(viewModel: TunerViewModel) {
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Povećaj A4", tint = tunerColors.neutral)
             }
+            if (referencePitch != TunerConfig.DEFAULT_REFERENCE_PITCH) {
+                IconButton(
+                    onClick = { viewModel.setReferencePitch(TunerConfig.DEFAULT_REFERENCE_PITCH) },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(Icons.Default.RestartAlt, contentDescription = "Vrati A4 na 440Hz", tint = tunerColors.neutral)
+                }
+            }
         }
 
         // 1. Gornji info - Fiksna visina
@@ -121,7 +139,7 @@ fun TunerScreen(viewModel: TunerViewModel) {
                 )
                 Text(
                     text = if (status.closestNote != null && status.frequency > 0)
-                        "Cilj: ${status.closestNote!!.frequency} Hz" else "",
+                        "Cilj: ${"%.1f".format(status.closestNote!!.frequency)} Hz" else "",
                     fontSize = 12.sp,
                     color = tunerColors.neutral.copy(alpha = 0.6f)
                 )
