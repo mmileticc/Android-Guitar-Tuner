@@ -10,7 +10,7 @@ import kotlin.math.abs
 
 class AudioAnalyzer {
     private var dispatcher: AudioDispatcher? = null
-    val pitchFlow = MutableStateFlow(-1f)
+    val pitchFlow = MutableStateFlow(DEFAULT_PITCH)
     val volumeFlow = MutableStateFlow(0f)
 
     private var smoothedPitch = 0f
@@ -18,23 +18,18 @@ class AudioAnalyzer {
 
     // NOVE VARIJABLE ZA STABILNOST
     private var invalidDetectionCount = 0
-    private val MAX_INVALID_ATTEMPTS = 5 // Dozvoljavamo 5 loših očitavanja pre gašenja
 
     fun startListening() {
         if (dispatcher != null) return // Zaštita da ne pokreneš dva puta
 
-        val sampleRate = 22050
-        val bufferSize = 1024 // Smanji na 1024 za brži odziv
-        val overlap = 512
-
-        dispatcher = AudioDispatcherFactory.fromDefaultMicrophone(sampleRate, bufferSize, overlap)
+        dispatcher = AudioDispatcherFactory.fromDefaultMicrophone(SAMPLE_RATE, BUFFER_SIZE, OVERLAP)
 
         // 1. Prvo izvlačimo jačinu
         val volumeProcessor = object : AudioProcessor {
             override fun process(audioEvent: be.tarsos.dsp.AudioEvent?): Boolean {
                 audioEvent?.let {
                     val rms = it.rms.toFloat()
-                    smoothedVolume = smoothedVolume * 0.8f + rms * 0.2f // EMA
+                    smoothedVolume = smoothedVolume * VOLUME_SMOOTHING + rms * (1f - VOLUME_SMOOTHING) // EMA
                     volumeFlow.value = smoothedVolume
                 }
                 return true
@@ -48,12 +43,12 @@ class AudioAnalyzer {
             val prob = result.probability
 
             // LOGIKA POVERENJA:
-            if (pitch > 60f && pitch < 500f && prob > 0.80f && smoothedVolume > 0.008f) {
+            if (pitch > PITCH_MIN_HZ && pitch < PITCH_MAX_HZ && prob > MIN_PROBABILITY && smoothedVolume > MIN_VOLUME_THRESHOLD) {
                 // Signal je čist i jak
                 invalidDetectionCount = 0
 
                 // EMA filter za pitch (0.2f je dobro)
-                smoothedPitch = smoothedPitch * 0.8f + pitch * 0.2f
+                smoothedPitch = smoothedPitch * PITCH_SMOOTHING + pitch * (1f - PITCH_SMOOTHING)
                 pitchFlow.value = smoothedPitch
             } else {
                 // Algoritam trenutno ne vidi dobar ton, ali ne gasimo odmah!
@@ -67,8 +62,8 @@ class AudioAnalyzer {
 
         val pitchProcessor = PitchProcessor(
             PitchProcessor.PitchEstimationAlgorithm.YIN,
-            sampleRate.toFloat(),
-            bufferSize,
+            SAMPLE_RATE.toFloat(),
+            BUFFER_SIZE,
             pdh
         )
 
@@ -80,8 +75,8 @@ class AudioAnalyzer {
 
     private fun fadeOut() {
         if (smoothedPitch > 0) {
-            smoothedPitch *= 0.85f // Lagani pad
-            if (smoothedPitch < 40f) smoothedPitch = -1f
+            smoothedPitch *= FADE_OUT_FACTOR // Lagani pad
+            if (smoothedPitch < FADE_OUT_THRESHOLD) smoothedPitch = DEFAULT_PITCH
             pitchFlow.value = smoothedPitch
         }
     }
@@ -89,7 +84,28 @@ class AudioAnalyzer {
     fun stopListening() {
         dispatcher?.stop()
         dispatcher = null
-        smoothedPitch = -1f
-        pitchFlow.value = -1f
+        smoothedPitch = DEFAULT_PITCH
+        pitchFlow.value = DEFAULT_PITCH
+    }
+
+    companion object {
+        private const val SAMPLE_RATE = 22050
+        private const val BUFFER_SIZE = 1024
+        private const val OVERLAP = 512
+        
+        private const val MAX_INVALID_ATTEMPTS = 5
+        
+        private const val VOLUME_SMOOTHING = 0.8f
+        private const val PITCH_SMOOTHING = 0.8f
+        
+        private const val PITCH_MIN_HZ = 60f
+        private const val PITCH_MAX_HZ = 500f
+        private const val MIN_PROBABILITY = 0.80f
+        private const val MIN_VOLUME_THRESHOLD = 0.008f
+        
+        private const val FADE_OUT_FACTOR = 0.85f
+        private const val FADE_OUT_THRESHOLD = 40f
+        
+        private const val DEFAULT_PITCH = -1f
     }
 }
