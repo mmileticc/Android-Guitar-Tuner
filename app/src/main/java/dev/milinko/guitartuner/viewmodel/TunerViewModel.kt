@@ -1,154 +1,100 @@
 package dev.milinko.guitartuner.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.milinko.guitartuner.audio.AudioAnalyzer
+import dev.milinko.guitartuner.audio.TunerConfig
+import dev.milinko.guitartuner.data.TunerPreferencesRepository
 import dev.milinko.guitartuner.model.GuitarTunings
-import dev.milinko.guitartuner.model.Note
-import dev.milinko.guitartuner.model.StandardTuning
+import dev.milinko.guitartuner.model.PitchStabilizer
 import dev.milinko.guitartuner.model.Tuning
 import dev.milinko.guitartuner.model.TuningStatus
-import dev.milinko.guitartuner.model.calculateDiffCents
+import dev.milinko.guitartuner.model.chromaticGridFrequencies
+import dev.milinko.guitartuner.model.scaledToReferencePitch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
-class TunerViewModel : ViewModel() {
+/**
+ * Orkestrira audio capture ([AudioAnalyzer]), pitch-processing pipeline ([PitchStabilizer])
+ * i perzistenciju podešavanja ([TunerPreferencesRepository]). Sama obrada pitch signala
+ * (octave correction, smoothing, note lock) živi u PitchStabilizer-u - čistoj Kotlin klasi
+ * bez Android zavisnosti, testiranoj direktno JVM unit testovima.
+ */
+class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val audioAnalyzer = AudioAnalyzer()
+    private val preferences = TunerPreferencesRepository(application)
+    private val pitchStabilizer = PitchStabilizer()
 
     private val _tuningStatus = MutableStateFlow(TuningStatus())
-    val tuningStatus: StateFlow<TuningStatus> = _tuningStatus
+    val tuningStatus: StateFlow<TuningStatus> = _tuningStatus.asStateFlow()
 
     val volumeFlow: StateFlow<Float> = audioAnalyzer.volumeFlow
 
-    private val currentTuning: Tuning = StandardTuning.GUITAR_6_STRING
+    /** Poruka o grešci mikrofona (npr. zauzet drugom aplikacijom), null ako je sve OK. */
+    val micError: StateFlow<String?> = audioAnalyzer.micErrorFlow
 
-    // Novi StateFlow za praćenje selektovanog štima
-    private val _selectedTuning = MutableStateFlow(GuitarTunings.ALL_TUNINGS[0])
-    val selectedTuning: StateFlow<Tuning> = _selectedTuning.asStateFlow()
+    private val _selectedBaseTuning = MutableStateFlow(GuitarTunings.ALL_TUNINGS[0])
+    private val _referencePitch = MutableStateFlow(TunerConfig.DEFAULT_REFERENCE_PITCH)
+    val referencePitch: StateFlow<Float> = _referencePitch.asStateFlow()
 
-    private var smoothedPitch = 0f
-    private var lockedNote: Note? = null
-
-    private val pitchBuffer = ArrayDeque<Float>()
+    /** Trenutni štim, već skaliran na izabranu referentnu frekvenciju (kalibraciju). */
+    val selectedTuning: StateFlow<Tuning> = combine(_selectedBaseTuning, _referencePitch) { tuning, ref ->
+        tuning.scaledToReferencePitch(ref)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, GuitarTunings.ALL_TUNINGS[0])
 
     init {
         viewModelScope.launch {
+            val saved = preferences.loadInitial()
+            _selectedBaseTuning.value = GuitarTunings.ALL_TUNINGS.find { it.name == saved.tuningName }
+                ?: GuitarTunings.ALL_TUNINGS[0]
+            _referencePitch.value = saved.referencePitch
+        }
+
+        viewModelScope.launch {
             audioAnalyzer.pitchFlow.collect { pitch ->
-                if (pitch > 0) processPitch(pitch)
-            }
-        }
-    }
-
-    private var lastStablePitch = 0f
-    private var jumpCounter = 0
-    private val MAX_JUMPS = 3 // Koliko puta dozvoljavamo "skok" pre nego što poverujemo
-
-    private var detectionStartTime = 0L
-    private fun processPitch(rawPitch: Float) {
-
-        val currentTime = System.currentTimeMillis()
-        val volume = volumeFlow.value
-
-        // Ako je signal tek počeo (bio na nuli), zabeleži vreme
-        if (smoothedPitch == 0f) {
-            detectionStartTime = currentTime
-            smoothedPitch = rawPitch // Postavi bazu, ali ne šalji još u UI status ako želiš mirnu iglu
-            return
-        }
-
-        // Ignoriši prvih 150ms udara (Attack phase) da igla ne bi letela levo-desno
-        if (currentTime - detectionStartTime < 150) {
-            return
-        }
-
-        //val volume = volumeFlow.value
-        if (volume < 0.015f) return
-
-        // 1. FILTER SKOKOVA (Anti-Harmonic Logic)
-        // Ako je skok preveliki (npr. više od oktave ili 50 Hz naglo), budi sumnjičav
-        if (lastStablePitch > 0) {
-            val deltaFromLast = abs(rawPitch - lastStablePitch)
-            if (deltaFromLast > 30f) { // Prag za sumnjiv skok
-                jumpCounter++
-                if (jumpCounter < MAX_JUMPS) {
-                    return // Ignorišemo ovaj "spike" dok se ne ponovi više puta
+                if (pitch > 0) {
+                    val result = pitchStabilizer.process(
+                        rawPitch = pitch,
+                        currentTimeMs = System.currentTimeMillis(),
+                        targetNotes = selectedTuning.value.notes,
+                        fallbackTargets = chromaticGridFrequencies(_referencePitch.value),
+                        referencePitch = _referencePitch.value
+                    )
+                    if (result != null) _tuningStatus.value = result
+                } else {
+                    resetPitchState()
                 }
-            } else {
-                jumpCounter = 0
             }
         }
-
-        // 2. MEDIAN FILTER (Ovo ti je odlično, zadrži ga)
-        val pitch = medianPitch(rawPitch)
-        lastStablePitch = pitch
-
-        // 3. ADAPTIVE SMOOTHING (Tvoja logika je super, samo mala korekcija)
-        val delta = pitch - smoothedPitch
-        val absDelta = abs(delta)
-
-        // Ako je signal tek počeo (bio na 0), skoči odmah na taj pitch
-        if (smoothedPitch == 0f) {
-            smoothedPitch = pitch
-        } else {
-            val alpha = when {
-                absDelta > 50f -> 0.8f // Nagli početak nove note
-                absDelta > 10f -> 0.3f
-                else           -> 0.1f // Fino štimovanje
-            }
-            smoothedPitch += alpha * delta
-        }
-
-        // 4. NOTE LOCK (Histerezis - tvoja getStableNote je već dobra)
-        val note = getStableNote(smoothedPitch)
-        var diffCents = calculateDiffCents(smoothedPitch, note.frequency)
-
-        // 5. DEAD ZONE (Odlično za stabilnost igle)
-        if (abs(diffCents) < 1.5f) diffCents = 0f
-
-        _tuningStatus.value = TuningStatus(
-            frequency = smoothedPitch,
-            closestNote = note,
-            diffCents = diffCents.coerceIn(-50f, 50f)
-        )
-    }
-    private fun medianPitch(newPitch: Float): Float {
-        pitchBuffer.addLast(newPitch)
-        if (pitchBuffer.size > 5) pitchBuffer.removeFirst()
-
-        val sorted = pitchBuffer.sorted()
-        return sorted[sorted.size / 2]
     }
 
-    private fun getStableNote(pitch: Float): Note {
-        val closest = findClosestNote(pitch)
-
-        if (lockedNote == null) {
-            lockedNote = closest
-        }
-
-        val diff = abs(calculateDiffCents(pitch, lockedNote!!.frequency))
-
-        if (diff > 35) { // tek kad se BAŠ pomeri menjaj notu
-            lockedNote = closest
-        }
-
-        return lockedNote!!
+    /** Vraća UI u prazno stanje kad signal utihne (umesto da ostane "zamrznut" na poslednjoj noti). */
+    private fun resetPitchState() {
+        if (!pitchStabilizer.isActive && _tuningStatus.value.frequency == 0f) return
+        pitchStabilizer.reset()
+        _tuningStatus.value = TuningStatus()
     }
 
     fun changeTuning(tuning: Tuning) {
-        _selectedTuning.value = tuning
-        lockedNote = null // Resetuj lock da bi brže uhvatio nove ciljne frekvencije
-        _tuningStatus.value = TuningStatus() // Očisti UI
+        _selectedBaseTuning.value = tuning
+        pitchStabilizer.reset()
+        _tuningStatus.value = TuningStatus()
+        viewModelScope.launch { preferences.saveTuningName(tuning.name) }
     }
-    private fun findClosestNote(pitch: Float): Note {
-        val notes = _selectedTuning.value.notes
-        return notes.minByOrNull {
-            abs(calculateDiffCents(pitch, it.frequency))
-        } ?: notes.first()
+
+    /** Kalibracija referentne frekvencije A4 (438-445Hz). */
+    fun setReferencePitch(hz: Float) {
+        val clamped = hz.coerceIn(TunerConfig.REFERENCE_PITCH_MIN, TunerConfig.REFERENCE_PITCH_MAX)
+        _referencePitch.value = clamped
+        pitchStabilizer.reset()
+        viewModelScope.launch { preferences.saveReferencePitch(clamped) }
     }
 
     fun startListening() = audioAnalyzer.startListening()

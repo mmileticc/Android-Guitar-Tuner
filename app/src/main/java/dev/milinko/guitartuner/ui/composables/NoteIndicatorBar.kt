@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.milinko.guitartuner.model.Note
-
+import dev.milinko.guitartuner.ui.theme.LocalTunerColors
 
 @Composable
 fun NoteIndicatorBar(
@@ -27,6 +27,8 @@ fun NoteIndicatorBar(
     activeNote: Note?,
     isTuned: Boolean
 ) {
+    val tunerColors = LocalTunerColors.current
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -44,9 +46,9 @@ fun NoteIndicatorBar(
                         .drawBehind {
                             drawCircle(
                                 color = when {
-                                    isActive && isTuned -> Color(0xFF2E7D32) // Zelena ako je naštimovano
-                                    isActive -> Color(0xFF2196F3) // Plava ako je detektovana
-                                    else -> Color.LightGray.copy(alpha = 0.3f)
+                                    isActive && isTuned -> tunerColors.inTune
+                                    isActive -> tunerColors.indicatorActive
+                                    else -> tunerColors.indicatorInactive
                                 },
                                 radius = size.minDimension / 2
                             )
@@ -54,21 +56,20 @@ fun NoteIndicatorBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        // filter { !it.isDigit() } izbacuje brojeve (npr. E2 -> E, Eb4 -> Eb)
+                        // filter { !it.isDigit() } izbacuje brojeve (npr. E2 -> E, F#3 -> F#)
                         text = note.name.filter { !it.isDigit() },
-                        color = if (isActive) Color.White else Color.Gray,
+                        color = if (isActive) Color.White else tunerColors.neutral,
                         fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = if (note.name.length > 2) 12.sp else 14.sp // Malo smanji font ako je nota dugačka (npr. G#)
+                        fontSize = if (note.name.length > 2) 12.sp else 14.sp
                     )
                 }
 
-                // Mala tačkica ispod aktivne note
                 if (isActive) {
                     Box(
                         modifier = Modifier
                             .padding(top = 4.dp)
                             .size(4.dp)
-                            .drawBehind { drawCircle(color = Color(0xFF2196F3)) }
+                            .drawBehind { drawCircle(color = tunerColors.indicatorActive) }
                     )
                 } else {
                     Spacer(modifier = Modifier.height(8.dp))

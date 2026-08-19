@@ -1,61 +1,3 @@
-//package dev.milinko.guitartuner.ui.composables
-//
-//
-//import androidx.compose.foundation.layout.fillMaxWidth
-//import androidx.compose.foundation.layout.padding
-//import androidx.compose.material3.*
-//import androidx.compose.runtime.*
-//import androidx.compose.ui.Modifier
-//import androidx.compose.ui.unit.dp
-//import dev.milinko.guitartuner.model.Tuning
-//import dev.milinko.guitartuner.model.GuitarTunings
-//
-//@OptIn(ExperimentalMaterial3Api::class)
-//@Composable
-//fun TuningSelector(
-//    currentTuning: Tuning,
-//    onTuningChange: (Tuning) -> Unit
-//) {
-//    var expanded by remember { mutableStateOf(false) }
-//
-//    // Enkapsulirana logika menija
-//    ExposedDropdownMenuBox(
-//        expanded = expanded,
-//        onExpandedChange = { expanded = !expanded },
-//        modifier = Modifier
-//            .fillMaxWidth()
-//            .padding(bottom = 16.dp)
-//    ) {
-//        OutlinedTextField(
-//            value = currentTuning.name,
-//            onValueChange = {},
-//            readOnly = true,
-//            label = { Text("Izaberi Štim") },
-//            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-//            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-//            modifier = Modifier
-//                .menuAnchor() // Ključno za pozicioniranje
-//                .fillMaxWidth()
-//        )
-//
-//        ExposedDropdownMenu(
-//            expanded = expanded,
-//            onDismissRequest = { expanded = false }
-//        ) {
-//            GuitarTunings.ALL_TUNINGS.forEach { tuning ->
-//                DropdownMenuItem(
-//                    text = { Text(tuning.name) },
-//                    onClick = {
-//                        onTuningChange(tuning)
-//                        expanded = false
-//                    },
-//                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-//                )
-//            }
-//        }
-//    }
-//}
-
 package dev.milinko.guitartuner.ui.composables
 
 import androidx.compose.foundation.layout.*
@@ -127,7 +69,7 @@ fun TuningSelector(
                 modifier = Modifier.padding(horizontal = 8.dp)
             ) {
                 GuitarTunings.ALL_TUNINGS.forEach { tuning ->
-                    val isSelected = tuning == currentTuning
+                    val isSelected = tuning.name == currentTuning.name
                     DropdownMenuItem(
                         text = {
                             Text(
